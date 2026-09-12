@@ -1,6 +1,9 @@
 name: IvyBridge CUDA Build
 
 on:
+  push:
+    branches:
+      - ivybridge-b10926
   workflow_dispatch:
 
 jobs:
