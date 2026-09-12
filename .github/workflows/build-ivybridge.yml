@@ -78,27 +78,35 @@ jobs:
       - name: Verify CPU ISA
         shell: pwsh
         run: |
-          $files = Get-ChildItem -Recurse build -Include *.ninja,*.cmake -File
-          $text = ($files | ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
+          $files = Get-ChildItem -Recurse build -Filter "*.ninja" -File
+          $ivyFiles = $files | Where-Object { $_.FullName -match "ivybridge" }
 
-          Write-Host "Checking CPU compiler flags..."
+          if (-not $ivyFiles) {
+              throw "FAIL: No Ivy Bridge Ninja files found."
+          }
+
+          $text = ($ivyFiles | ForEach-Object {
+              Get-Content $_.FullName -Raw
+          }) -join "`n"
+
+          Write-Host "Checking Ivy Bridge compiler flags..."
 
           if ($text -match '/arch:AVX2') {
-              throw "FAIL: AVX2 detected"
+              throw "FAIL: AVX2 detected in Ivy Bridge backend."
           }
 
           if ($text -match '/arch:AVX512') {
-              throw "FAIL: AVX512 detected"
+              throw "FAIL: AVX512 detected in Ivy Bridge backend."
           }
 
           if ($text -match '/arch:AVX') {
-              Write-Host "PASS: /arch:AVX detected"
+              Write-Host "PASS: Ivy Bridge backend uses /arch:AVX."
           }
           else {
-              throw "FAIL: /arch:AVX not detected"
+              throw "FAIL: /arch:AVX not detected in Ivy Bridge backend."
           }
 
-          Write-Host "ISA check completed."
+          Write-Host "Ivy Bridge ISA check completed."
 
       - name: Verify Ivy Bridge backend
         shell: pwsh
@@ -140,6 +148,7 @@ jobs:
           Copy-Item -Recurse build/bin/Release/* artifact/
 
           Write-Host "Packaged files:"
+
           Get-ChildItem -Recurse artifact -File |
               ForEach-Object {
                   Write-Host $_.FullName
