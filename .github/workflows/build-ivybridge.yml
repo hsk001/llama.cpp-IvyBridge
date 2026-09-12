@@ -31,42 +31,31 @@ jobs:
           $path = "ggml/src/CMakeLists.txt"
           $text = Get-Content $path -Raw
 
-          $old = @"
-          if (GGML_SYSTEM_ARCH STREQUAL "x86")
-              ggml_add_cpu_backend_variant(x64)
-              ggml_add_cpu_backend_variant(sse42              SSE42)
-              ggml_add_cpu_backend_variant(sandybridge        SSE42 AVX)
-              if (NOT MSVC)
-                  # __FMA__ and __F16C__ are not defined in MSVC, however they are implied with AVX2/AVX512
-                  ggml_add_cpu_backend_variant(ivybridge      SSE42 AVX F16C)
-                  ggml_add_cpu_backend_variant(piledriver     SSE42 AVX F16C FMA)
-              endif()
-"@
-
-          $new = @"
-          if (GGML_SYSTEM_ARCH STREQUAL "x86")
-              ggml_add_cpu_backend_variant(x64)
-              ggml_add_cpu_backend_variant(sse42              SSE42)
-              ggml_add_cpu_backend_variant(sandybridge        SSE42 AVX)
-              ggml_add_cpu_backend_variant(ivybridge           SSE42 AVX)
-              if (NOT MSVC)
-                  # __FMA__ and __F16C__ are not defined in MSVC, however they are implied with AVX2/AVX512
-                  ggml_add_cpu_backend_variant(ivybridge-f16c SSE42 AVX F16C)
-                  ggml_add_cpu_backend_variant(piledriver     SSE42 AVX F16C FMA)
-              endif()
-"@
-
-          if ($text -notlike "*ggml_add_cpu_backend_variant(sandybridge*") {
+          if ($text -notmatch 'ggml_add_cpu_backend_variant\(sandybridge\s+SSE42 AVX\)') {
               throw "FAIL: Could not find x86 CPU variant section."
           }
 
-          if ($text -notlike "*ggml_add_cpu_backend_variant(ivybridge      SSE42 AVX F16C)*") {
+          if ($text -notmatch 'ggml_add_cpu_backend_variant\(ivybridge\s+SSE42 AVX F16C\)') {
               throw "FAIL: Expected upstream Ivy Bridge block was not found."
           }
 
-          $text = $text.Replace($old, $new)
+          $pattern = 'ggml_add_cpu_backend_variant\(sandybridge\s+SSE42 AVX\)\r?\n\s+if \(NOT MSVC\)\r?\n\s+# __FMA__ and __F16C__ are not defined in MSVC, however they are implied with AVX2/AVX512\r?\n\s+ggml_add_cpu_backend_variant\(ivybridge\s+SSE42 AVX F16C\)'
 
-          Set-Content -Path $path -Value $text -NoNewline
+          $replacement = @(
+              '    ggml_add_cpu_backend_variant(sandybridge        SSE42 AVX)'
+              '    ggml_add_cpu_backend_variant(ivybridge          SSE42 AVX)'
+              '    if (NOT MSVC)'
+              '        # __FMA__ and __F16C__ are not defined in MSVC, however they are implied with AVX2/AVX512'
+              '        ggml_add_cpu_backend_variant(ivybridge-f16c SSE42 AVX F16C)'
+          ) -join "`r`n"
+
+          $newText = [regex]::Replace($text, $pattern, $replacement, 1)
+
+          if ($newText -eq $text) {
+              throw "FAIL: CMake variant replacement did not occur."
+          }
+
+          Set-Content -Path $path -Value $newText -NoNewline
 
           Write-Host "PASS: Ivy Bridge SSE4.2 + AVX variant enabled for MSVC."
 
@@ -121,6 +110,7 @@ jobs:
           }
 
           Write-Host "PASS: Dedicated Ivy Bridge backend found:"
+
           $dlls | ForEach-Object {
               Write-Host $_.FullName
           }
@@ -128,17 +118,32 @@ jobs:
       - name: List CPU backends
         shell: pwsh
         run: |
-          Get-ChildItem -Recurse build -Filter "ggml-cpu*.dll" -File |
-            ForEach-Object {
+          $dlls = Get-ChildItem -Recurse build -Filter "ggml-cpu*.dll" -File
+
+          if (-not $dlls) {
+              throw "FAIL: No CPU backend DLLs were found."
+          }
+
+          Write-Host "CPU backend DLLs:"
+
+          $dlls | ForEach-Object {
               Write-Host $_.FullName
-            }
+          }
 
       - name: Package
         shell: pwsh
         run: |
           Remove-Item -Recurse -Force artifact -ErrorAction SilentlyContinue
+
           New-Item -ItemType Directory -Force -Path artifact | Out-Null
+
           Copy-Item -Recurse build/bin/Release/* artifact/
+
+          Write-Host "Packaged files:"
+          Get-ChildItem -Recurse artifact -File |
+              ForEach-Object {
+                  Write-Host $_.FullName
+              }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
