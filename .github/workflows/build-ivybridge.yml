@@ -112,7 +112,6 @@ jobs:
         shell: pwsh
         run: |
           $files = Get-ChildItem -Recurse build -Include *.ninja,*.cmake -File
-
           $text = ($files | ForEach-Object {
               Get-Content $_.FullName -Raw
           }) -join "`n"
@@ -134,7 +133,6 @@ jobs:
           }
 
           Write-Host "PASS: Dedicated Ivy Bridge backend found:"
-
           $dlls | ForEach-Object {
               Write-Host $_.FullName
           }
@@ -149,7 +147,6 @@ jobs:
           }
 
           Write-Host "CPU backend DLLs:"
-
           $dlls | ForEach-Object {
               Write-Host $_.FullName
           }
@@ -163,11 +160,9 @@ jobs:
           Copy-Item -Recurse build/bin/Release/* artifact/
 
           Write-Host "Packaged files:"
-
-          Get-ChildItem -Recurse artifact -File |
-              ForEach-Object {
-                  Write-Host $_.FullName
-              }
+          Get-ChildItem -Recurse artifact -File | ForEach-Object {
+              Write-Host $_.FullName
+          }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
