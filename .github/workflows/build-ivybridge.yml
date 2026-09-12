@@ -1,0 +1,55 @@
+name: IvyBridge CUDA Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Windows x64 - Ivy Bridge + CUDA 12.4
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup CUDA
+        uses: ./.github/actions/windows-setup-cuda
+        with:
+          cuda_version: '12.4'
+          cuda_arch: x64
+
+      - name: Install Ninja
+        shell: pwsh
+        run: choco install ninja -y
+
+      - name: Configure
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake -S . -B build -G "Ninja Multi-Config" -DGGML_BACKEND_DL=OFF -DGGML_NATIVE=OFF -DGGML_CPU=ON -DGGML_SSE42=ON -DGGML_AVX=ON -DGGML_AVX2=OFF -DGGML_FMA=OFF -DGGML_BMI2=OFF -DGGML_AVX_VNNI=OFF -DGGML_AVX512=OFF -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=86 -DLLAMA_BUILD_BORINGSSL=ON
+
+      - name: Build
+        shell: cmd
+        run: |
+          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+          cmake --build build --config Release -j %NINJA_JOBS%
+
+      - name: Verify CPU configuration
+        shell: pwsh
+        run: |
+          Write-Host "Checking generated build configuration..."
+          Get-ChildItem -Recurse build -Filter "*.ninja" | Select-Object -First 5 FullName
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifact | Out-Null
+          Copy-Item -Recurse build/bin/Release/* artifact/ -ErrorAction SilentlyContinue
+          Copy-Item -Recurse build/bin/* artifact/ -ErrorAction SilentlyContinue
+          Compress-Archive -Path artifact/* -DestinationPath llama.cpp-IvyBridge-b10926-cuda12.4.zip -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama.cpp-IvyBridge-b10926-cuda12.4
+          path: llama.cpp-IvyBridge-b10926-cuda12.4.zip
