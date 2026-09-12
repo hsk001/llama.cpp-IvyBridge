@@ -75,10 +75,44 @@ jobs:
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config Release -j %NINJA_JOBS%
 
+      - name: Verify Ivy Bridge compiler flags
+        shell: pwsh
+        run: |
+          $commands = ninja -C build -f build-Release.ninja -t commands 2>&1
+          $matches = $commands | Select-String "ggml-cpu-ivybridge"
+
+          if (-not $matches) {
+              throw "FAIL: Could not find ggml-cpu-ivybridge compile commands."
+          }
+
+          Write-Host "Ivy Bridge compile commands:"
+          $matches | ForEach-Object {
+              Write-Host $_.Line
+          }
+
+          $text = ($matches | ForEach-Object {
+              $_.Line
+          }) -join "`n"
+
+          if ($text -notmatch "/arch:AVX") {
+              throw "FAIL: Ivy Bridge backend is missing /arch:AVX."
+          }
+
+          if ($text -match "/arch:AVX2") {
+              throw "FAIL: Ivy Bridge backend incorrectly contains /arch:AVX2."
+          }
+
+          if ($text -match "/arch:AVX512") {
+              throw "FAIL: Ivy Bridge backend incorrectly contains /arch:AVX512."
+          }
+
+          Write-Host "PASS: Ivy Bridge backend uses AVX without AVX2/AVX512."
+
       - name: Verify Ivy Bridge configuration
         shell: pwsh
         run: |
           $files = Get-ChildItem -Recurse build -Include *.ninja,*.cmake -File
+
           $text = ($files | ForEach-Object {
               Get-Content $_.FullName -Raw
           }) -join "`n"
