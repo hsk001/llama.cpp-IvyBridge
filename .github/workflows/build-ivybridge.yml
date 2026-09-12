@@ -25,11 +25,49 @@ jobs:
         shell: pwsh
         run: choco install ninja -y
 
+      - name: Enable Ivy Bridge CPU backend
+        shell: pwsh
+        run: |
+          $path = "ggml/src/CMakeLists.txt"
+          $text = Get-Content $path -Raw
+
+          $marker = "ggml_add_backend(CPU)"
+
+          if ($text -notmatch [regex]::Escape($marker)) {
+              throw "FAIL: Could not find CPU backend insertion point."
+          }
+
+          if ($text -match "GGML_CPU_IVYBRIDGE") {
+              throw "FAIL: Ivy Bridge backend patch already present."
+          }
+
+          $patch = @"
+          option(GGML_CPU_IVYBRIDGE "ggml: build dedicated Ivy Bridge CPU backend" OFF)
+
+          if (GGML_CPU_IVYBRIDGE)
+              if (NOT GGML_BACKEND_DL)
+                  message(FATAL_ERROR "GGML_CPU_IVYBRIDGE requires GGML_BACKEND_DL")
+              endif()
+
+              if (NOT GGML_SYSTEM_ARCH STREQUAL "x86")
+                  message(FATAL_ERROR "GGML_CPU_IVYBRIDGE is currently supported only on x86")
+              endif()
+
+              ggml_add_cpu_backend_variant(ivybridge SSE42 AVX)
+          endif()
+
+          "@
+
+          $text = $text.Replace($marker, "$patch`n$marker")
+          Set-Content -Path $path -Value $text -NoNewline
+
+          Write-Host "PASS: Dedicated Ivy Bridge backend enabled."
+
       - name: Configure
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
-          cmake -S . -B build -G "Ninja Multi-Config" -DGGML_BACKEND_DL=OFF -DGGML_NATIVE=OFF -DGGML_CPU=ON -DGGML_SSE42=ON -DGGML_AVX=ON -DGGML_AVX2=OFF -DGGML_FMA=OFF -DGGML_BMI2=OFF -DGGML_AVX_VNNI=OFF -DGGML_AVX512=OFF -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=86 -DLLAMA_BUILD_BORINGSSL=ON
+          cmake -S . -B build -G "Ninja Multi-Config" -DGGML_BACKEND_DL=ON -DBUILD_SHARED_LIBS=ON -DGGML_NATIVE=OFF -DGGML_CPU=ON -DGGML_CPU_IVYBRIDGE=ON -DGGML_CPU_ALL_VARIANTS=OFF -DGGML_SSE42=ON -DGGML_AVX=ON -DGGML_AVX2=OFF -DGGML_FMA=OFF -DGGML_BMI2=OFF -DGGML_AVX_VNNI=OFF -DGGML_AVX512=OFF -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=86 -DLLAMA_BUILD_BORINGSSL=ON
 
       - name: Build
         shell: cmd
@@ -46,11 +84,37 @@ jobs:
         run: |
           $files = Get-ChildItem -Recurse build -Include *.ninja,*.cmake -File
           $text = ($files | ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
+
           Write-Host "Checking CPU compiler flags..."
-          if ($text -match '/arch:AVX2') { throw "FAIL: AVX2 detected" }
-          if ($text -match '/arch:AVX512') { throw "FAIL: AVX512 detected" }
-          if ($text -match '/arch:AVX') { Write-Host "PASS: /arch:AVX detected" } else { throw "FAIL: /arch:AVX not detected" }
+
+          if ($text -match '/arch:AVX2') {
+              throw "FAIL: AVX2 detected"
+          }
+
+          if ($text -match '/arch:AVX512') {
+              throw "FAIL: AVX512 detected"
+          }
+
+          if ($text -match '/arch:AVX') {
+              Write-Host "PASS: /arch:AVX detected"
+          }
+          else {
+              throw "FAIL: /arch:AVX not detected"
+          }
+
           Write-Host "ISA check completed."
+
+      - name: Verify Ivy Bridge backend
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem -Recurse build -Filter "ggml-cpu-ivybridge.dll" -File
+
+          if (-not $dll) {
+              throw "FAIL: ggml-cpu-ivybridge.dll was not produced."
+          }
+
+          Write-Host "PASS: Dedicated Ivy Bridge backend found:"
+          $dll | ForEach-Object { Write-Host $_.FullName }
 
       - name: Package
         shell: pwsh
@@ -58,10 +122,10 @@ jobs:
           Remove-Item -Recurse -Force artifact -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path artifact | Out-Null
           Copy-Item -Recurse build/bin/Release/* artifact/
-          Compress-Archive -Path artifact/* -DestinationPath llama.cpp-IvyBridge-b10926-cuda12.4.zip -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: llama.cpp-IvyBridge-b10926-cuda12.4
-          path: llama.cpp-IvyBridge-b10926-cuda12.4.zip
+          name: llama.cpp-IvyBridge-b10926-cuda12.4-ivybackend
+          path: artifact/*
+          if-no-files-found: error
