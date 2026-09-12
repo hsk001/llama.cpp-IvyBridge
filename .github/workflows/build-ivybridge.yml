@@ -25,49 +25,56 @@ jobs:
         shell: pwsh
         run: choco install ninja -y
 
-      - name: Enable Ivy Bridge CPU backend
+      - name: Enable Ivy Bridge variant
         shell: pwsh
         run: |
           $path = "ggml/src/CMakeLists.txt"
           $text = Get-Content $path -Raw
 
-          $marker = "ggml_add_backend(CPU)"
+          $old = @"
+          if (GGML_SYSTEM_ARCH STREQUAL "x86")
+              ggml_add_cpu_backend_variant(x64)
+              ggml_add_cpu_backend_variant(sse42              SSE42)
+              ggml_add_cpu_backend_variant(sandybridge        SSE42 AVX)
+              if (NOT MSVC)
+                  # __FMA__ and __F16C__ are not defined in MSVC, however they are implied with AVX2/AVX512
+                  ggml_add_cpu_backend_variant(ivybridge      SSE42 AVX F16C)
+                  ggml_add_cpu_backend_variant(piledriver     SSE42 AVX F16C FMA)
+              endif()
+"@
 
-          if ($text -notmatch [regex]::Escape($marker)) {
-              throw "FAIL: Could not find CPU backend insertion point."
+          $new = @"
+          if (GGML_SYSTEM_ARCH STREQUAL "x86")
+              ggml_add_cpu_backend_variant(x64)
+              ggml_add_cpu_backend_variant(sse42              SSE42)
+              ggml_add_cpu_backend_variant(sandybridge        SSE42 AVX)
+              ggml_add_cpu_backend_variant(ivybridge           SSE42 AVX)
+              if (NOT MSVC)
+                  # __FMA__ and __F16C__ are not defined in MSVC, however they are implied with AVX2/AVX512
+                  ggml_add_cpu_backend_variant(ivybridge-f16c SSE42 AVX F16C)
+                  ggml_add_cpu_backend_variant(piledriver     SSE42 AVX F16C FMA)
+              endif()
+"@
+
+          if ($text -notlike "*ggml_add_cpu_backend_variant(sandybridge*") {
+              throw "FAIL: Could not find x86 CPU variant section."
           }
 
-          if ($text -match "GGML_CPU_IVYBRIDGE") {
-              throw "FAIL: Ivy Bridge backend patch already present."
+          if ($text -notlike "*ggml_add_cpu_backend_variant(ivybridge      SSE42 AVX F16C)*") {
+              throw "FAIL: Expected upstream Ivy Bridge block was not found."
           }
 
-          $patch = @"
-          option(GGML_CPU_IVYBRIDGE "ggml: build dedicated Ivy Bridge CPU backend" OFF)
+          $text = $text.Replace($old, $new)
 
-          if (GGML_CPU_IVYBRIDGE)
-              if (NOT GGML_BACKEND_DL)
-                  message(FATAL_ERROR "GGML_CPU_IVYBRIDGE requires GGML_BACKEND_DL")
-              endif()
-
-              if (NOT GGML_SYSTEM_ARCH STREQUAL "x86")
-                  message(FATAL_ERROR "GGML_CPU_IVYBRIDGE is currently supported only on x86")
-              endif()
-
-              ggml_add_cpu_backend_variant(ivybridge SSE42 AVX)
-          endif()
-
-          "@
-
-          $text = $text.Replace($marker, "$patch`n$marker")
           Set-Content -Path $path -Value $text -NoNewline
 
-          Write-Host "PASS: Dedicated Ivy Bridge backend enabled."
+          Write-Host "PASS: Ivy Bridge SSE4.2 + AVX variant enabled for MSVC."
 
       - name: Configure
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
-          cmake -S . -B build -G "Ninja Multi-Config" -DGGML_BACKEND_DL=ON -DBUILD_SHARED_LIBS=ON -DGGML_NATIVE=OFF -DGGML_CPU=ON -DGGML_CPU_IVYBRIDGE=ON -DGGML_CPU_ALL_VARIANTS=OFF -DGGML_SSE42=ON -DGGML_AVX=ON -DGGML_AVX2=OFF -DGGML_FMA=OFF -DGGML_BMI2=OFF -DGGML_AVX_VNNI=OFF -DGGML_AVX512=OFF -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=86 -DLLAMA_BUILD_BORINGSSL=ON
+          cmake -S . -B build -G "Ninja Multi-Config" -DGGML_BACKEND_DL=ON -DBUILD_SHARED_LIBS=ON -DGGML_NATIVE=OFF -DGGML_CPU=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_SSE42=ON -DGGML_AVX=ON -DGGML_AVX2=OFF -DGGML_FMA=OFF -DGGML_BMI2=OFF -DGGML_AVX_VNNI=OFF -DGGML_AVX512=OFF -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=86 -DLLAMA_BUILD_BORINGSSL=ON
 
       - name: Build
         shell: cmd
@@ -107,14 +114,24 @@ jobs:
       - name: Verify Ivy Bridge backend
         shell: pwsh
         run: |
-          $dll = Get-ChildItem -Recurse build -Filter "ggml-cpu-ivybridge.dll" -File
+          $dlls = Get-ChildItem -Recurse build -Filter "ggml-cpu-ivybridge.dll" -File
 
-          if (-not $dll) {
+          if (-not $dlls) {
               throw "FAIL: ggml-cpu-ivybridge.dll was not produced."
           }
 
           Write-Host "PASS: Dedicated Ivy Bridge backend found:"
-          $dll | ForEach-Object { Write-Host $_.FullName }
+          $dlls | ForEach-Object {
+              Write-Host $_.FullName
+          }
+
+      - name: List CPU backends
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse build -Filter "ggml-cpu*.dll" -File |
+            ForEach-Object {
+              Write-Host $_.FullName
+            }
 
       - name: Package
         shell: pwsh
@@ -126,6 +143,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: llama.cpp-IvyBridge-b10926-cuda12.4-ivybackend
+          name: llama.cpp-IvyBridge-b10926-ivybackend-cuda12.4
           path: artifact/*
           if-no-files-found: error
